@@ -110,6 +110,14 @@ summary that captures: what happened, why it matters, and any action or implicat
 Return ONLY a JSON array — no markdown, no explanation — with:
 [{{"id": "...", "summary": "..."}}]"""
 
+INTRO_SYSTEM = """You write short, punchy introductions for a daily news digest email.
+Given a list of article titles and summaries, write 1–2 sentences that highlight the most
+important takeaways for the reader. Adjust your tone to match the news:
+- If the news is alarming or involves breaches/threats, be direct and urgent.
+- If the news is mostly positive (new tools, regulations progressing), be upbeat and encouraging.
+- If it's mixed, strike a balanced tone.
+Return ONLY the intro text — no quotes, no markdown, no labels."""
+
 
 def _build_relevance_context(cfg: dict) -> list[str]:
     """Build the reusable context parts of the relevance prompt (interests, prefs)."""
@@ -293,6 +301,32 @@ def summarize_articles(client: anthropic.Anthropic, articles: list[dict]) -> lis
     ]
 
 
+def generate_intro(client: anthropic.Anthropic, articles: list[dict]) -> str:
+    """Generate a short intro for the digest email based on article summaries."""
+    article_list = "\n".join(
+        f'- [{a["category"]}] {a["title"]}: {a.get("summary", "")[:200]}'
+        for a in articles
+    )
+
+    log.debug("Intro prompt:\n%s", article_list)
+
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=256,
+            system=INTRO_SYSTEM,
+            messages=[{"role": "user", "content": article_list}],
+        )
+    except (httpx.TimeoutException, anthropic.APIError) as exc:
+        log.error("Intro API call failed: %s", exc)
+        return ""
+
+    raw_text = msg.content[0].text.strip()
+    log.debug("Intro raw response:\n%s", raw_text)
+
+    return raw_text
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -336,7 +370,8 @@ def main():
     if not with_summary:
         log.info("No summarized content to send — skipping email.")
     else:
-        html = render_email(summarized, cfg)
+        intro = generate_intro(claude, with_summary)
+        html = render_email(summarized, cfg, intro=intro)
         subject = f"📰 Feed Digest — {datetime.now().strftime('%d %b %Y, %H:%M')}"
         send_digest(cfg, subject, html)
         log.info("Digest email sent.")

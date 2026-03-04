@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 
 
-def render_email(articles: list[dict], cfg: dict) -> str:
+def render_email(articles: list[dict], cfg: dict, intro: str = "") -> str:
     now = datetime.now().strftime("%A, %d %B %Y — %H:%M")
     count = len(articles)
 
@@ -99,6 +99,13 @@ def render_email(articles: list[dict], cfg: dict) -> str:
             {count} article{'s' if count != 1 else ''} across {len(by_category)} categories
           </p>
         </td></tr>
+
+        <!-- Intro -->
+        {f'''<tr><td style="background:#ffffff;padding:20px 32px;">
+          <p style="margin:0;font-size:15px;line-height:1.6;color:#374151;font-style:italic;">
+            {_esc(intro)}
+          </p>
+        </td></tr>''' if intro else ''}
 
         <!-- Category sections -->
         {sections}
