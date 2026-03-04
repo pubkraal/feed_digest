@@ -31,7 +31,9 @@ mailgun:
   domain: "mg.yourdomain.com"    # Your Mailgun sending domain
 
 email:
-  to: "john@example.com"
+  to:
+    - "john@example.com"
+    # - "colleague@example.com"
   from: "digest@mg.yourdomain.com"
 
 # Describe your interests — this goes directly into the Claude relevance prompt.

@@ -12,7 +12,8 @@ def send_digest(cfg: dict, subject: str, html: str):
     mg = cfg["mailgun"]
     api_key = mg["api_key"]
     domain = mg["domain"]
-    to_addr = cfg["email"]["to"]
+    to_raw = cfg["email"]["to"]
+    to_addr = ", ".join(to_raw) if isinstance(to_raw, list) else to_raw
     from_addr = cfg["email"].get("from", f"digest@{domain}")
 
     resp = requests.post(
