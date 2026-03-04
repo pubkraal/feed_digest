@@ -10,7 +10,7 @@ import re
 import sqlite3
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -64,6 +64,18 @@ def init_db():
             seen_at    TEXT NOT NULL
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sent_articles (
+            article_id TEXT,
+            title      TEXT,
+            url        TEXT,
+            source     TEXT,
+            category   TEXT,
+            summary    TEXT,
+            reason     TEXT,
+            sent_at    TEXT
+        )
+    """)
     con.commit()
     return con
 
@@ -90,9 +102,36 @@ def mark_seen(con, articles: list[dict]):
     con.commit()
 
 
-# ── Claude: relevance + summary ───────────────────────────────────────────────
+def record_sent(con, articles: list[dict]):
+    now = datetime.now(timezone.utc).isoformat()
+    con.executemany(
+        "INSERT INTO sent_articles"
+        " (article_id, title, url, source, category, summary, reason, sent_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                a["id"],
+                a.get("title", ""),
+                a.get("url", ""),
+                a.get("source", ""),
+                a.get("category", ""),
+                a.get("summary", ""),
+                a.get("reason", ""),
+                now,
+            )
+            for a in articles
+        ],
+    )
+    con.commit()
 
-MAX_RELEVANT_PER_CATEGORY = 3
+
+def cleanup_old_seen(con, days: int = 7):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    con.execute("DELETE FROM seen_articles WHERE seen_at < ?", (cutoff,))
+    con.commit()
+
+
+# ── Claude: relevance + summary ───────────────────────────────────────────────
 
 RELEVANCE_SYSTEM = """You are a research assistant filtering news articles for a specific reader.
 The reader's interests, preferences, and example articles they liked/disliked are described below.
@@ -153,6 +192,7 @@ def _score_batch(
     context_parts: list[str],
     articles: list[dict],
     category: str,
+    max_relevant: int = 5,
 ) -> list[dict]:
     """Score a single batch of articles for relevance."""
     article_list = "\n".join(
@@ -168,7 +208,7 @@ def _score_batch(
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=MAX_TOKENS,
-            system=RELEVANCE_SYSTEM.format(max_relevant=MAX_RELEVANT_PER_CATEGORY),
+            system=RELEVANCE_SYSTEM.format(max_relevant=max_relevant),
             messages=[{"role": "user", "content": prompt}],
         )
     except (httpx.TimeoutException, anthropic.APIError) as exc:
@@ -213,7 +253,7 @@ def _score_batch(
     for a in articles:
         if a["id"] in relevant_ids:
             result.append({**a, "reason": reason_by_id.get(a["id"], "")})
-            if len(result) >= MAX_RELEVANT_PER_CATEGORY:
+            if len(result) >= max_relevant:
                 break
 
     return result
@@ -225,11 +265,14 @@ def score_relevance(
     """Ask Claude which articles are relevant, batched by category."""
     context_parts = _build_relevance_context(cfg)
     groups = _group_by_category(articles)
+    max_relevant = cfg.get("feeds", {}).get("max_relevant_per_category", 5)
 
     result = []
     for category, batch in groups.items():
         log.info("Scoring %d articles in category '%s'", len(batch), category)
-        result.extend(_score_batch(client, context_parts, batch, category))
+        result.extend(
+            _score_batch(client, context_parts, batch, category, max_relevant)
+        )
 
     return result
 
@@ -374,10 +417,12 @@ def main():
         html = render_email(summarized, cfg, intro=intro)
         subject = f"📰 Feed Digest — {datetime.now().strftime('%d %b %Y, %H:%M')}"
         send_digest(cfg, subject, html)
+        record_sent(con, with_summary)
         log.info("Digest email sent.")
 
     # 6. Persist state
     mark_seen(con, unseen)
+    cleanup_old_seen(con)
     log.info("Done.")
 
 

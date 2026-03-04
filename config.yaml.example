@@ -11,6 +11,7 @@ anthropic:
 # Feed source names come from the feed's own <title> element.
 feeds:
   max_articles_per_category: 50  # Max articles fetched per category per run
+  max_relevant_per_category: 5   # Max relevant articles kept per category
 
   categories:
     Security:

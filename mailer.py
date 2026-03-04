@@ -17,10 +17,10 @@ def send_digest(cfg: dict, subject: str, html: str):
     from_addr = cfg["email"].get("from", f"digest@{domain}")
 
     for recipient in recipients:
-        _send_one(api_key, domain, from_addr, recipient, subject, html)
+        send_one(api_key, domain, from_addr, recipient, subject, html)
 
 
-def _send_one(
+def send_one(
     api_key: str, domain: str, from_addr: str, to_addr: str, subject: str, html: str
 ):
     resp = requests.post(
