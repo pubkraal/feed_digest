@@ -1,2 +1,4 @@
 /__pycache__
 /.coverage
+/config.yaml
+/state.db

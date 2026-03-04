@@ -2,6 +2,8 @@
 # Copy to config.yaml and fill in your values.
 # Secrets can also be passed as env vars (see config.py).
 
+debug: false  # Set to true to log full Claude prompts and responses
+
 anthropic:
   api_key: "sk-ant-..."          # or set ANTHROPIC_API_KEY env var
 

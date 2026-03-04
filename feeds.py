@@ -4,10 +4,13 @@ feeds.py — Fetch articles from RSS/Atom feeds.
 
 import logging
 import re
+from datetime import datetime, timezone, timedelta
 
 import feedparser
 
 log = logging.getLogger(__name__)
+
+MAX_AGE = timedelta(hours=24)
 
 
 def fetch_rss_articles(cfg: dict) -> list[dict]:
@@ -33,6 +36,14 @@ def fetch_rss_articles(cfg: dict) -> list[dict]:
                 link = getattr(entry, "link", "") or getattr(entry, "id", "")
                 if not link or link in seen_urls:
                     continue
+
+                # Skip articles older than 24 hours
+                published_parsed = getattr(entry, "published_parsed", None)
+                if published_parsed:
+                    pub_dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - pub_dt > MAX_AGE:
+                        continue
+
                 seen_urls.add(link)
 
                 title = getattr(entry, "title", "") or "(no title)"

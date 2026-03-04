@@ -5,6 +5,8 @@ import sqlite3
 import unittest
 from unittest.mock import patch, MagicMock
 
+import httpx
+
 from digest import (
     init_db,
     filter_unseen,
@@ -110,15 +112,18 @@ class TestMarkSeen(unittest.TestCase):
 # ── Claude functions ─────────────────────────────────────────────────────────
 
 
+def _mock_client(response_json):
+    """Build a mock Anthropic client that returns the given JSON."""
+    client = MagicMock()
+    msg = MagicMock()
+    msg.content = [MagicMock(text=json.dumps(response_json))]
+    msg.stop_reason = "end_turn"
+    msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+    client.messages.create.return_value = msg
+    return client
+
+
 class TestScoreRelevance(unittest.TestCase):
-
-    def _mock_client(self, response_json):
-        client = MagicMock()
-        msg = MagicMock()
-        msg.content = [MagicMock(text=json.dumps(response_json))]
-        client.messages.create.return_value = msg
-
-        return client
 
     def test_returns_relevant_articles_with_reasons(self):
         articles = [_article(id="1"), _article(id="2")]
@@ -126,7 +131,7 @@ class TestScoreRelevance(unittest.TestCase):
             {"id": "1", "relevant": True, "reason": "matches interests"},
             {"id": "2", "relevant": False, "reason": "not relevant"},
         ]
-        client = self._mock_client(response)
+        client = _mock_client(response)
         cfg = {"interests": "security", "preferences": {}}
 
         result = score_relevance(client, cfg, articles)
@@ -138,7 +143,7 @@ class TestScoreRelevance(unittest.TestCase):
     def test_includes_preference_examples_in_prompt(self):
         articles = [_article()]
         response = [{"id": "1", "relevant": True, "reason": "good"}]
-        client = self._mock_client(response)
+        client = _mock_client(response)
         cfg = {
             "interests": "security",
             "preferences": {
@@ -167,10 +172,7 @@ class TestSummarizeArticles(unittest.TestCase):
             {"id": "1", "summary": "Summary one."},
             {"id": "2", "summary": "Summary two."},
         ]
-        client = MagicMock()
-        msg = MagicMock()
-        msg.content = [MagicMock(text=json.dumps(response))]
-        client.messages.create.return_value = msg
+        client = _mock_client(response)
 
         result = summarize_articles(client, articles)
 
@@ -180,11 +182,7 @@ class TestSummarizeArticles(unittest.TestCase):
 
     def test_missing_summary_gets_default(self):
         articles = [_article(id="1")]
-        response = []
-        client = MagicMock()
-        msg = MagicMock()
-        msg.content = [MagicMock(text=json.dumps(response))]
-        client.messages.create.return_value = msg
+        client = _mock_client([])
 
         result = summarize_articles(client, articles)
 
@@ -313,6 +311,99 @@ class TestMain(unittest.TestCase):
 
         mock_mark_seen.assert_called_once()
         mock_summarize.assert_not_called()
+
+
+class TestTimeoutHandling(unittest.TestCase):
+
+    def test_score_relevance_timeout_returns_empty(self):
+        client = MagicMock()
+        client.messages.create.side_effect = httpx.ReadTimeout("timed out")
+        articles = [_article(id="1")]
+        cfg = {"interests": "security", "preferences": {}}
+
+        result = score_relevance(client, cfg, articles)
+
+        self.assertEqual(result, [])
+
+    def test_summarize_timeout_returns_no_summaries(self):
+        client = MagicMock()
+        client.messages.create.side_effect = httpx.ReadTimeout("timed out")
+        articles = [_article(id="1")]
+
+        result = summarize_articles(client, articles)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["summary"], "No summary available.")
+
+    def test_score_relevance_json_error_returns_empty(self):
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = [MagicMock(text="not json at all")]
+        msg.stop_reason = "end_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = msg
+        cfg = {"interests": "security", "preferences": {}}
+
+        result = score_relevance(client, cfg, [_article(id="1")])
+
+        self.assertEqual(result, [])
+
+    def test_summarize_json_error_returns_empty_summaries(self):
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = [MagicMock(text="not json")]
+        msg.stop_reason = "end_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = msg
+
+        result = summarize_articles(client, [_article(id="1")])
+
+        self.assertEqual(result[0]["summary"], "No summary available.")
+
+
+class TestMainEmailGuard(unittest.TestCase):
+
+    @patch("digest.send_digest")
+    @patch("digest.render_email", return_value="<html>digest</html>")
+    @patch("digest.summarize_articles")
+    @patch("digest.score_relevance")
+    @patch("digest.filter_unseen")
+    @patch("digest.mark_seen")
+    @patch("digest.init_db")
+    @patch("digest.fetch_rss_articles")
+    @patch("digest.load_config")
+    @patch("digest.anthropic.Anthropic")
+    def test_no_email_when_all_summaries_missing(
+        self,
+        mock_anthropic,
+        mock_load_config,
+        mock_fetch,
+        mock_init_db,
+        mock_mark_seen,
+        mock_filter_unseen,
+        mock_score,
+        mock_summarize,
+        mock_render,
+        mock_send,
+    ):
+        cfg = {
+            "anthropic": {"api_key": "test"},
+            "feeds": {"categories": {"Tech": ["https://t.com/feed"]}},
+        }
+        mock_load_config.return_value = cfg
+        mock_init_db.return_value = MagicMock()
+
+        articles = [_article()]
+        mock_fetch.return_value = articles
+        mock_filter_unseen.return_value = articles
+        mock_score.return_value = articles
+        mock_summarize.return_value = [
+            {**_article(), "summary": "No summary available."}
+        ]
+
+        main()
+
+        mock_send.assert_not_called()
 
 
 class TestFeedlyFunctionsRemoved(unittest.TestCase):

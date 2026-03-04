@@ -16,7 +16,7 @@ def send_digest(cfg: dict, subject: str, html: str):
     from_addr = cfg["email"].get("from", f"digest@{domain}")
 
     resp = requests.post(
-        f"https://api.mailgun.net/v3/{domain}/messages",
+        f"https://api.eu.mailgun.net/v3/{domain}/messages",
         auth=("api", api_key),
         data={
             "from": from_addr,

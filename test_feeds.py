@@ -1,9 +1,23 @@
 """Tests for feeds.py — RSS fetching module."""
 
+import time
 import unittest
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
 from feeds import fetch_rss_articles
+
+
+def _recent_time_struct():
+    """Return a time.struct_time for 1 hour ago (within 24h window)."""
+    dt = datetime.now(timezone.utc) - timedelta(hours=1)
+    return dt.timetuple()
+
+
+def _old_time_struct():
+    """Return a time.struct_time for 48 hours ago (outside 24h window)."""
+    dt = datetime.now(timezone.utc) - timedelta(hours=48)
+    return dt.timetuple()
 
 
 def _make_feed(title="Test Feed", entries=None):
@@ -19,6 +33,7 @@ def _make_entry(
     link="https://example.com/1",
     summary="A summary",
     published="2026-03-01",
+    published_parsed=None,
 ):
     entry = MagicMock()
     entry.get = lambda k, d=None: {
@@ -33,6 +48,9 @@ def _make_entry(
     entry.id = link
     entry.summary = summary
     entry.published = published
+    entry.published_parsed = (
+        published_parsed if published_parsed is not None else _recent_time_struct()
+    )
     return entry
 
 
@@ -205,6 +223,39 @@ class TestFetchRssArticles(unittest.TestCase):
         articles = fetch_rss_articles(cfg)
 
         self.assertEqual(len(articles), 50)
+
+    @patch("feeds.feedparser.parse")
+    def test_old_articles_filtered_out(self, mock_parse):
+        recent = _make_entry(
+            title="New",
+            link="https://example.com/new",
+            published_parsed=_recent_time_struct(),
+        )
+        old = _make_entry(
+            title="Old",
+            link="https://example.com/old",
+            published_parsed=_old_time_struct(),
+        )
+        mock_parse.return_value = _make_feed(entries=[recent, old])
+
+        cfg = self._cfg(categories={"Tech": ["https://t.com/feed"]})
+        articles = fetch_rss_articles(cfg)
+
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0]["title"], "New")
+
+    @patch("feeds.feedparser.parse")
+    def test_article_without_published_parsed_is_included(self, mock_parse):
+        entry = _make_entry(
+            title="No date", link="https://example.com/nodate", published_parsed=None
+        )
+        entry.published_parsed = None
+        mock_parse.return_value = _make_feed(entries=[entry])
+
+        cfg = self._cfg(categories={"Tech": ["https://t.com/feed"]})
+        articles = fetch_rss_articles(cfg)
+
+        self.assertEqual(len(articles), 1)
 
 
 if __name__ == "__main__":
