@@ -13,9 +13,16 @@ def send_digest(cfg: dict, subject: str, html: str):
     api_key = mg["api_key"]
     domain = mg["domain"]
     to_raw = cfg["email"]["to"]
-    to_addr = ", ".join(to_raw) if isinstance(to_raw, list) else to_raw
+    recipients = to_raw if isinstance(to_raw, list) else [to_raw]
     from_addr = cfg["email"].get("from", f"digest@{domain}")
 
+    for recipient in recipients:
+        _send_one(api_key, domain, from_addr, recipient, subject, html)
+
+
+def _send_one(
+    api_key: str, domain: str, from_addr: str, to_addr: str, subject: str, html: str
+):
     resp = requests.post(
         f"https://api.eu.mailgun.net/v3/{domain}/messages",
         auth=("api", api_key),
@@ -29,7 +36,6 @@ def send_digest(cfg: dict, subject: str, html: str):
     )
 
     if resp.status_code == 200:
-        log.info(f"Mailgun accepted message (id={resp.json().get('id')})")
+        log.info(f"Mailgun accepted message to {to_addr} (id={resp.json().get('id')})")
     else:
-        log.error(f"Mailgun error {resp.status_code}: {resp.text}")
-        resp.raise_for_status()
+        log.error(f"Mailgun error {resp.status_code} for {to_addr}: {resp.text}")
