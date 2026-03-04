@@ -1,0 +1,80 @@
+# feed-digest configuration
+# Copy to config.yaml and fill in your values.
+# Secrets can also be passed as env vars (see config.py).
+
+anthropic:
+  api_key: "sk-ant-..."          # or set ANTHROPIC_API_KEY env var
+
+feedly:
+  access_token: "..."            # Developer token from feedly.com/v3/auth/dev
+  user_id: "..."                 # Your Feedly user ID (visible in the dev token response)
+
+  # List the Feedly category names you want to pull from.
+  # Use the exact names as they appear in your Feedly sidebar.
+  # Bare names like "Security" expand to "user/{user_id}/category/Security" automatically.
+  categories:
+    - Security
+    - Compliance
+    - Technology
+    - Development
+    # - "user/YOUR_ID/category/Some Other Name"  # full ID form also works
+
+  max_articles_per_category: 50  # Max articles fetched per category per run
+
+mailgun:
+  api_key: "key-..."             # or set MAILGUN_API_KEY
+  domain: "mg.yourdomain.com"    # Your Mailgun sending domain
+
+email:
+  to: "john@example.com"
+  from: "digest@mg.yourdomain.com"
+
+# Describe your interests — this goes directly into the Claude relevance prompt.
+# Be as specific as you like; more detail = better filtering.
+interests: |
+  I am an information security and technology consultant based in the Netherlands.
+  I am interested in:
+  - Information security: NIS2, DORA, ISO 27001/27002, cybersecurity regulation, threat intelligence
+  - Dutch and EU regulatory developments (AVG/GDPR, Cyberbeveiligingswet, financial regulation)
+  - Software development: Go, Rust, Python, FreeBSD, Linux, DevOps, infrastructure
+  - Third-party and supply chain risk management
+  - AI governance, LLM safety policy, and EU AI Act developments
+  - Privacy, data protection, and digital rights in Europe
+
+  I am NOT interested in:
+  - US domestic politics beyond tech regulation
+  - Sports, entertainment, celebrity news
+  - Consumer product reviews
+  - Cryptocurrency speculation and NFTs
+
+# ── Preference tuning ─────────────────────────────────────────────────────────
+# Over time, add examples of articles you liked or disliked so that Claude
+# can learn what to surface. You can also set topic priorities.
+preferences:
+  # Titles or one-line descriptions of articles you found valuable.
+  positive_examples:
+    - "NIS2 transposition deadline: what Dutch organisations need to do now"
+    - "Go 1.23 iterator functions and how they change error handling"
+    - "EU AI Act risk classification — practical compliance checklist"
+    # - "FreeBSD 14.1 ZFS improvements for production workloads"
+
+  # Titles or one-line descriptions of articles that wasted your time.
+  negative_examples:
+    - "Top 10 AI startups to watch in 2026 (listicle with no depth)"
+    - "Company X raises $50M Series B (funding announcement)"
+    - "Generic vendor whitepaper disguised as a blog post"
+    # - "Comparison of consumer VPN services"
+
+  # Topics to always surface (even borderline articles).
+  high_priority_topics:
+    - "NIS2"
+    - "DORA"
+    - "ISO 27001"
+    - "EU AI Act"
+    - "Go language releases and RFCs"
+
+  # Topics to include only when the article is exceptionally good.
+  low_priority_topics:
+    - "general AI hype"
+    - "startup funding rounds"
+    - "cryptocurrency regulation"
