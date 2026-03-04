@@ -9,7 +9,9 @@ import yaml
 
 
 def load_config(path: str | None = None) -> dict:
-    cfg_path = Path(path or os.environ.get("DIGEST_CONFIG", Path(__file__).parent / "config.yaml"))
+    cfg_path = Path(
+        path or os.environ.get("DIGEST_CONFIG", Path(__file__).parent / "config.yaml")
+    )
 
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config file not found: {cfg_path}")
@@ -18,11 +20,9 @@ def load_config(path: str | None = None) -> dict:
         cfg = yaml.safe_load(f)
 
     # Allow env var overrides for secrets (useful in production)
-    _env_override(cfg, "anthropic.api_key",      "ANTHROPIC_API_KEY")
-    _env_override(cfg, "feedly.access_token",    "FEEDLY_ACCESS_TOKEN")
-    _env_override(cfg, "feedly.user_id",         "FEEDLY_USER_ID")
-    _env_override(cfg, "mailgun.api_key",        "MAILGUN_API_KEY")
-    _env_override(cfg, "mailgun.domain",         "MAILGUN_DOMAIN")
+    _env_override(cfg, "anthropic.api_key", "ANTHROPIC_API_KEY")
+    _env_override(cfg, "mailgun.api_key", "MAILGUN_API_KEY")
+    _env_override(cfg, "mailgun.domain", "MAILGUN_DOMAIN")
 
     return cfg
 

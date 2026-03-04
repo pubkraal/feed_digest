@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-feed_digest.py — Feedly → Claude → Mailgun digest
-Fetches unread articles, filters for relevance via Claude API,
+feed_digest.py — RSS → Claude → Mailgun digest
+Fetches articles from RSS feeds, filters for relevance via Claude API,
 summarizes them, and sends an HTML email via Mailgun.
 """
 
@@ -12,10 +12,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
 import anthropic
 
 from config import load_config
+from feeds import fetch_rss_articles
 from mailer import send_digest
 from templates import render_email
 
@@ -30,6 +30,7 @@ DB_PATH = Path(__file__).parent / "state.db"
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
+
 
 def init_db():
     con = sqlite3.connect(DB_PATH)
@@ -46,9 +47,13 @@ def init_db():
 def filter_unseen(con, articles: list[dict]) -> list[dict]:
     ids = [a["id"] for a in articles]
     placeholders = ",".join("?" * len(ids))
-    seen = {row[0] for row in con.execute(
-        f"SELECT article_id FROM seen_articles WHERE article_id IN ({placeholders})", ids
-    )}
+    seen = {
+        row[0]
+        for row in con.execute(
+            f"SELECT article_id FROM seen_articles WHERE article_id IN ({placeholders})",  # nosec B608
+            ids,
+        )
+    }
     return [a for a in articles if a["id"] not in seen]
 
 
@@ -59,115 +64,6 @@ def mark_seen(con, articles: list[dict]):
         [(a["id"], now) for a in articles],
     )
     con.commit()
-
-
-# ── Feedly ────────────────────────────────────────────────────────────────────
-
-def fetch_feedly_articles(cfg: dict) -> list[dict]:
-    """Fetch unread articles from one or more Feedly category streams."""
-    token = cfg["feedly"]["access_token"]
-    user_id = cfg["feedly"]["user_id"]
-    headers = {"Authorization": f"OAuth {token}"}
-    base_url = "https://cloud.feedly.com/v3"
-
-    # Build list of stream IDs from config.
-    # Each entry can be a bare category name ("Security") or a full stream ID.
-    raw_categories = cfg["feedly"].get("categories", [])
-    if not raw_categories:
-        raise ValueError(
-            "No Feedly categories configured. "
-            "Add a 'categories' list to config.yaml under feedly:"
-        )
-
-    stream_ids = [
-        c if c.startswith("user/") else f"user/{user_id}/category/{c}"
-        for c in raw_categories
-    ]
-
-    seen_in_run: set[str] = set()
-    articles: list[dict] = []
-
-    for stream_id in stream_ids:
-        category_label = stream_id.split("/category/")[-1]
-        params = {
-            "streamId": stream_id,
-            "count": cfg["feedly"].get("max_articles_per_category", 50),
-            "unreadOnly": True,
-            "ranked": "newest",
-        }
-
-        resp = requests.get(f"{base_url}/streams/contents", headers=headers, params=params, timeout=30)
-        if resp.status_code == 404:
-            log.warning(f"Category not found on Feedly: {stream_id} — skipping")
-            continue
-        resp.raise_for_status()
-        data = resp.json()
-
-        batch = 0
-        for item in data.get("items", []):
-            article_id = item.get("id", "")
-            if article_id in seen_in_run:
-                continue  # a feed can appear in multiple categories
-            seen_in_run.add(article_id)
-
-            content = (
-                item.get("summary", {}).get("content", "")
-                or item.get("content", {}).get("content", "")
-            )
-            articles.append({
-                "id":        article_id,
-                "title":     item.get("title", "(no title)"),
-                "url":       item.get("canonicalUrl") or item.get("alternate", [{}])[0].get("href", ""),
-                "source":    item.get("origin", {}).get("title", "Unknown"),
-                "category":  category_label,
-                "published": item.get("published", 0),
-                "snippet":   _strip_html(content)[:800],
-            })
-            batch += 1
-
-        log.info(f"  {batch} articles from category '{category_label}'")
-
-    log.info(f"Fetched {len(articles)} total unread articles across {len(stream_ids)} categories")
-    return articles
-
-
-def mark_as_read_on_feedly(cfg: dict, articles: list[dict]):
-    """Mark articles as read on Feedly via the markers API."""
-    if not articles:
-        return
-
-    token = cfg["feedly"]["access_token"]
-    headers = {
-        "Authorization": f"OAuth {token}",
-        "Content-Type": "application/json",
-    }
-
-    entry_ids = [a["id"] for a in articles]
-
-    # Feedly accepts up to 1000 entry IDs per request; batch if needed.
-    batch_size = 1000
-    for i in range(0, len(entry_ids), batch_size):
-        batch = entry_ids[i : i + batch_size]
-        resp = requests.post(
-            "https://cloud.feedly.com/v3/markers",
-            headers=headers,
-            json={
-                "action": "markAsRead",
-                "type": "entries",
-                "entryIds": batch,
-            },
-            timeout=15,
-        )
-
-        if resp.ok:
-            log.info(f"Marked {len(batch)} articles as read on Feedly")
-        else:
-            log.warning(f"Failed to mark as read on Feedly ({resp.status_code}): {resp.text}")
-
-
-def _strip_html(html: str) -> str:
-    import re
-    return re.sub(r"<[^>]+>", " ", html).strip()
 
 
 # ── Claude: relevance + summary ───────────────────────────────────────────────
@@ -188,7 +84,9 @@ Return ONLY a JSON array — no markdown, no explanation — with:
 [{{"id": "...", "summary": "..."}}]"""
 
 
-def score_relevance(client: anthropic.Anthropic, cfg: dict, articles: list[dict]) -> list[dict]:
+def score_relevance(
+    client: anthropic.Anthropic, cfg: dict, articles: list[dict]
+) -> list[dict]:
     """Ask Claude which articles are relevant. Preserves the reason on each article."""
     interests = cfg["interests"]
     prefs = cfg.get("preferences", {})
@@ -270,28 +168,26 @@ def summarize_articles(client: anthropic.Anthropic, articles: list[dict]) -> lis
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     cfg = load_config()
     con = init_db()
     claude = anthropic.Anthropic(api_key=cfg["anthropic"]["api_key"])
 
-    # 1. Fetch
-    raw_articles = fetch_feedly_articles(cfg)
+    # 1. Fetch from RSS feeds
+    raw_articles = fetch_rss_articles(cfg)
     if not raw_articles:
-        log.info("No unread articles — exiting.")
+        log.info("No articles found — exiting.")
         return
 
-    # 2. Mark fetched articles as read on Feedly so they don't reappear
-    mark_as_read_on_feedly(cfg, raw_articles)
-
-    # 3. Deduplicate against local seen DB
+    # 2. Deduplicate against local seen DB
     unseen = filter_unseen(con, raw_articles)
     log.info(f"{len(unseen)} unseen articles after dedup")
     if not unseen:
         log.info("Nothing new — exiting.")
         return
 
-    # 4. Relevance filter
+    # 3. Relevance filter
     relevant = score_relevance(claude, cfg, unseen)
     log.info(f"{len(relevant)} articles deemed relevant")
     if not relevant:
@@ -299,19 +195,19 @@ def main():
         mark_seen(con, unseen)
         return
 
-    # 5. Summarize
+    # 4. Summarize
     summarized = summarize_articles(claude, relevant)
 
-    # 6. Send email
+    # 5. Send email
     html = render_email(summarized, cfg)
     subject = f"📰 Feed Digest — {datetime.now().strftime('%d %b %Y, %H:%M')}"
     send_digest(cfg, subject, html)
     log.info("Digest email sent.")
 
-    # 7. Persist state
+    # 6. Persist state
     mark_seen(con, unseen)
     log.info("Done.")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

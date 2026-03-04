@@ -5,21 +5,24 @@
 anthropic:
   api_key: "sk-ant-..."          # or set ANTHROPIC_API_KEY env var
 
-feedly:
-  access_token: "..."            # Developer token from feedly.com/v3/auth/dev
-  user_id: "..."                 # Your Feedly user ID (visible in the dev token response)
-
-  # List the Feedly category names you want to pull from.
-  # Use the exact names as they appear in your Feedly sidebar.
-  # Bare names like "Security" expand to "user/{user_id}/category/Security" automatically.
-  categories:
-    - Security
-    - Compliance
-    - Technology
-    - Development
-    # - "user/YOUR_ID/category/Some Other Name"  # full ID form also works
-
+# RSS/Atom feeds grouped by category.
+# Feed source names come from the feed's own <title> element.
+feeds:
   max_articles_per_category: 50  # Max articles fetched per category per run
+
+  categories:
+    Security:
+      - https://krebsonsecurity.com/feed/
+      - https://www.schneier.com/feed/atom/
+      # - https://www.darkreading.com/rss.xml
+    Compliance:
+      - https://some-compliance-blog.com/feed
+    Technology:
+      - https://techcrunch.com/feed
+      # - https://lwn.net/headlines/rss
+    Development:
+      - https://go.dev/blog/feed.atom
+      # - https://blog.rust-lang.org/feed.xml
 
 mailgun:
   api_key: "key-..."             # or set MAILGUN_API_KEY

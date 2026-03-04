@@ -31,8 +31,10 @@ def render_email(articles: list[dict], cfg: dict) -> str:
             pub = ""
             if a.get("published"):
                 try:
-                    pub = datetime.fromtimestamp(a["published"] / 1000).strftime("%d %b %Y")
-                except Exception:
+                    pub = datetime.fromtimestamp(a["published"] / 1000).strftime(
+                        "%d %b %Y"
+                    )
+                except (TypeError, ValueError, OSError):
                     pass
 
             reason_html = ""
@@ -117,4 +119,10 @@ def render_email(articles: list[dict], cfg: dict) -> str:
 
 
 def _esc(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
