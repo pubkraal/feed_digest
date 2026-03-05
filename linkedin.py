@@ -35,8 +35,11 @@ who advises {sector} sector clients. Write a compelling LinkedIn post (300–600
 - Opens with a hook that grabs attention
 - Analyzes the 2–3 articles provided through the lens of {sector} sector infosec
 - Connects the dots between the articles to form a narrative
+- Closes with 2–3 concrete, actionable security recommendations that {sector} sector
+  professionals can implement this week
 - Ends with a thought-provoking question or call to action
-- Uses a professional but approachable tone
+- Uses a positive, informative, and approachable tone — frame recommendations as
+  opportunities to strengthen security posture, never as fear-driven warnings
 - Includes relevant hashtags at the end
 
 Return ONLY the post text — no markdown formatting, no labels."""
@@ -116,6 +119,47 @@ def generate_linkedin_post(
     return msg.content[0].text.strip()
 
 
+def _esc(s: str) -> str:
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def format_post_as_html(post: str) -> str:
+    """Wrap a plain-text LinkedIn post in a simple HTML email."""
+    escaped = _esc(post)
+    body = escaped.replace("\n", "<br>\n")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LinkedIn Post</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,
+             'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+    <tr><td align="center" style="padding:32px 16px;">
+      <table width="600" cellpadding="0" cellspacing="0" role="presentation"
+             style="max-width:600px;width:100%;background:#ffffff;border-radius:8px;
+                    border:1px solid #e5e7eb;">
+        <tr><td style="padding:32px;">
+          <p style="margin:0;font-size:15px;line-height:1.7;color:#1f2937;">
+            {body}
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
 def cleanup_old_sent(con, days: int = 30):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     con.execute("DELETE FROM sent_articles WHERE sent_at < ?", (cutoff,))
@@ -162,8 +206,9 @@ def main():
     subject = (
         f"LinkedIn Post — {sector.title()} — {datetime.now().strftime('%d %b %Y')}"
     )
+    html = format_post_as_html(post)
     send_one(
-        mg["api_key"], mg["domain"], from_addr, "john@johnkraal.com", subject, post
+        mg["api_key"], mg["domain"], from_addr, "john@johnkraal.com", subject, html
     )
     log.info("LinkedIn post emailed.")
 

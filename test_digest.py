@@ -17,6 +17,7 @@ from digest import (
     cleanup_old_seen,
     score_relevance,
     summarize_articles,
+    generate_actions_and_briefs,
     main,
 )
 
@@ -227,7 +228,7 @@ def _mock_client(response_json):
 
 class TestScoreRelevance(unittest.TestCase):
 
-    def test_returns_relevant_articles_with_reasons(self):
+    def test_returns_relevant_and_non_relevant(self):
         articles = [_article(id="1"), _article(id="2")]
         response = [
             {"id": "1", "relevant": True, "reason": "matches interests"},
@@ -236,11 +237,14 @@ class TestScoreRelevance(unittest.TestCase):
         client = _mock_client(response)
         cfg = {"interests": "security", "preferences": {}}
 
-        result = score_relevance(client, cfg, articles)
+        relevant, non_relevant = score_relevance(client, cfg, articles)
 
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], "1")
-        self.assertEqual(result[0]["reason"], "matches interests")
+        self.assertEqual(len(relevant), 1)
+        self.assertEqual(relevant[0]["id"], "1")
+        self.assertEqual(relevant[0]["reason"], "matches interests")
+        self.assertEqual(len(non_relevant), 1)
+        self.assertEqual(non_relevant[0]["id"], "2")
+        self.assertEqual(non_relevant[0]["reason"], "not relevant")
 
     def test_includes_preference_examples_in_prompt(self):
         articles = [_article()]
@@ -277,9 +281,9 @@ class TestScoreRelevance(unittest.TestCase):
             "feeds": {"max_relevant_per_category": 2},
         }
 
-        result = score_relevance(client, cfg, articles)
+        relevant, _ = score_relevance(client, cfg, articles)
 
-        self.assertEqual(len(result), 2)
+        self.assertEqual(len(relevant), 2)
 
     def test_max_relevant_defaults_to_five(self):
         articles = [_article(id=str(i)) for i in range(10)]
@@ -289,9 +293,9 @@ class TestScoreRelevance(unittest.TestCase):
         client = _mock_client(response)
         cfg = {"interests": "security", "preferences": {}}
 
-        result = score_relevance(client, cfg, articles)
+        relevant, _ = score_relevance(client, cfg, articles)
 
-        self.assertEqual(len(result), 5)
+        self.assertEqual(len(relevant), 5)
 
     def test_max_relevant_in_system_prompt(self):
         articles = [_article()]
@@ -308,6 +312,40 @@ class TestScoreRelevance(unittest.TestCase):
         call_args = client.messages.create.call_args
         system = call_args[1]["system"]
         self.assertIn("7", system)
+
+    def test_non_relevant_across_categories(self):
+        articles = [
+            _article(id="1", category="Security"),
+            _article(id="2", category="Security"),
+            _article(id="3", category="Privacy"),
+            _article(id="4", category="Privacy"),
+        ]
+        response_sec = [
+            {"id": "1", "relevant": True, "reason": "good"},
+            {"id": "2", "relevant": False, "reason": "meh"},
+        ]
+        response_priv = [
+            {"id": "3", "relevant": False, "reason": "nope"},
+            {"id": "4", "relevant": True, "reason": "great"},
+        ]
+        client = MagicMock()
+        msg1 = MagicMock()
+        msg1.content = [MagicMock(text=json.dumps(response_sec))]
+        msg1.stop_reason = "end_turn"
+        msg1.usage = MagicMock(input_tokens=100, output_tokens=50)
+        msg2 = MagicMock()
+        msg2.content = [MagicMock(text=json.dumps(response_priv))]
+        msg2.stop_reason = "end_turn"
+        msg2.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.side_effect = [msg1, msg2]
+        cfg = {"interests": "security", "preferences": {}}
+
+        relevant, non_relevant = score_relevance(client, cfg, articles)
+
+        self.assertEqual(len(relevant), 2)
+        self.assertEqual(len(non_relevant), 2)
+        non_rel_ids = {a["id"] for a in non_relevant}
+        self.assertEqual(non_rel_ids, {"2", "3"})
 
 
 class TestSummarizeArticles(unittest.TestCase):
@@ -344,6 +382,7 @@ class TestMain(unittest.TestCase):
     @patch("digest.record_sent")
     @patch("digest.send_digest")
     @patch("digest.render_email", return_value="<html>digest</html>")
+    @patch("digest.generate_actions_and_briefs")
     @patch("digest.summarize_articles")
     @patch("digest.score_relevance")
     @patch("digest.filter_unseen")
@@ -362,6 +401,7 @@ class TestMain(unittest.TestCase):
         mock_filter_unseen,
         mock_score,
         mock_summarize,
+        mock_gen_actions,
         mock_render,
         mock_send,
         mock_record_sent,
@@ -375,10 +415,14 @@ class TestMain(unittest.TestCase):
         mock_init_db.return_value = MagicMock()
 
         articles = [_article()]
+        non_relevant = [_article(id="2")]
         mock_fetch.return_value = articles
         mock_filter_unseen.return_value = articles
-        mock_score.return_value = articles
+        mock_score.return_value = (articles, non_relevant)
         mock_summarize.return_value = articles
+        mock_gen_actions.return_value = [
+            {"action": "Do something.", "source_url": None, "source_title": None}
+        ]
 
         main()
 
@@ -386,6 +430,11 @@ class TestMain(unittest.TestCase):
         mock_filter_unseen.assert_called_once()
         mock_score.assert_called_once()
         mock_summarize.assert_called_once()
+        mock_gen_actions.assert_called_once()
+        mock_render.assert_called_once()
+        # Verify action_items passed to render_email
+        render_kwargs = mock_render.call_args
+        self.assertIn("action_items", render_kwargs[1])
         mock_send.assert_called_once()
         mock_record_sent.assert_called_once()
         mock_mark_seen.assert_called_once()
@@ -436,7 +485,7 @@ class TestMain(unittest.TestCase):
 
     @patch("digest.summarize_articles")
     @patch("digest.mark_seen")
-    @patch("digest.score_relevance", return_value=[])
+    @patch("digest.score_relevance", return_value=([], []))
     @patch("digest.filter_unseen")
     @patch("digest.init_db")
     @patch("digest.fetch_rss_articles")
@@ -465,6 +514,71 @@ class TestMain(unittest.TestCase):
         mock_summarize.assert_not_called()
 
 
+class TestGenerateActionsAndBriefs(unittest.TestCase):
+
+    def test_returns_action_items(self):
+        relevant = [_article(id="1", title="Patch Tuesday")]
+        non_relevant = [
+            _article(id="2", title="MFA bypass", url="https://mfa.com"),
+        ]
+        response = {
+            "action_items": [
+                {"action": "Apply patches.", "source_url": None, "source_title": None},
+                {
+                    "action": "Review MFA config.",
+                    "source_url": "https://mfa.com",
+                    "source_title": "MFA bypass",
+                },
+            ],
+        }
+        client = _mock_client(response)
+
+        result = generate_actions_and_briefs(client, relevant, non_relevant)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["action"], "Apply patches.")
+        self.assertIsNone(result[0]["source_url"])
+        self.assertEqual(result[1]["source_url"], "https://mfa.com")
+
+    def test_returns_empty_on_api_error(self):
+        client = MagicMock()
+        client.messages.create.side_effect = httpx.ReadTimeout("timed out")
+
+        result = generate_actions_and_briefs(client, [_article()], [])
+
+        self.assertEqual(result, [])
+
+    def test_returns_empty_on_json_error(self):
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = [MagicMock(text="not valid json")]
+        msg.stop_reason = "end_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = msg
+
+        result = generate_actions_and_briefs(client, [_article()], [])
+
+        self.assertEqual(result, [])
+
+    def test_includes_non_relevant_articles_in_prompt(self):
+        relevant = [_article(id="1", title="Relevant One")]
+        non_relevant = [_article(id="2", title="Non Relevant One")]
+        response = {"action_items": []}
+        client = _mock_client(response)
+
+        generate_actions_and_briefs(client, relevant, non_relevant)
+
+        call_args = client.messages.create.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        self.assertIn("Relevant One", prompt)
+        self.assertIn("Non Relevant One", prompt)
+
+    def test_system_prompt_instructs_concise_actions(self):
+        from digest import ACTIONS_SYSTEM
+
+        self.assertIn("concise", ACTIONS_SYSTEM.lower())
+
+
 class TestTimeoutHandling(unittest.TestCase):
 
     def test_score_relevance_timeout_returns_empty(self):
@@ -473,9 +587,10 @@ class TestTimeoutHandling(unittest.TestCase):
         articles = [_article(id="1")]
         cfg = {"interests": "security", "preferences": {}}
 
-        result = score_relevance(client, cfg, articles)
+        relevant, non_relevant = score_relevance(client, cfg, articles)
 
-        self.assertEqual(result, [])
+        self.assertEqual(relevant, [])
+        self.assertEqual(non_relevant, [])
 
     def test_summarize_timeout_returns_no_summaries(self):
         client = MagicMock()
@@ -496,9 +611,10 @@ class TestTimeoutHandling(unittest.TestCase):
         client.messages.create.return_value = msg
         cfg = {"interests": "security", "preferences": {}}
 
-        result = score_relevance(client, cfg, [_article(id="1")])
+        relevant, non_relevant = score_relevance(client, cfg, [_article(id="1")])
 
-        self.assertEqual(result, [])
+        self.assertEqual(relevant, [])
+        self.assertEqual(non_relevant, [])
 
     def test_summarize_json_error_returns_empty_summaries(self):
         client = MagicMock()
@@ -548,7 +664,7 @@ class TestMainEmailGuard(unittest.TestCase):
         articles = [_article()]
         mock_fetch.return_value = articles
         mock_filter_unseen.return_value = articles
-        mock_score.return_value = articles
+        mock_score.return_value = (articles, [])
         mock_summarize.return_value = [
             {**_article(), "summary": "No summary available."}
         ]

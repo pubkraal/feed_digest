@@ -10,6 +10,7 @@ from linkedin import (
     fetch_recent_sent,
     select_sector_articles,
     generate_linkedin_post,
+    format_post_as_html,
     cleanup_old_sent,
     main,
 )
@@ -190,6 +191,64 @@ class TestGenerateLinkedinPost(unittest.TestCase):
 
         self.assertEqual(result, "")
 
+    def test_prompt_includes_action_recommendations(self):
+        articles = [{"id": "1", "title": "A", "url": "https://a.com", "summary": "S"}]
+        client = _mock_client("Post text")
+
+        generate_linkedin_post(client, articles, "energy")
+
+        call_args = client.messages.create.call_args
+        system = call_args[1]["system"]
+        self.assertIn("actionable", system.lower())
+        self.assertIn("recommend", system.lower())
+
+    def test_prompt_emphasizes_positive_tone(self):
+        from linkedin import LINKEDIN_POST_SYSTEM
+
+        prompt = LINKEDIN_POST_SYSTEM.lower()
+        self.assertIn("positive", prompt)
+        self.assertNotIn("alarmist", prompt)
+
+
+# ── format_post_as_html ──────────────────────────────────────────────────────
+
+
+class TestFormatPostAsHtml(unittest.TestCase):
+
+    def test_wraps_in_html_document(self):
+        post = "Hello world"
+
+        result = format_post_as_html(post)
+
+        self.assertIn("<html", result)
+        self.assertIn("</html>", result)
+        self.assertIn("Hello world", result)
+
+    def test_converts_newlines_to_br(self):
+        post = "Line one\nLine two\nLine three"
+
+        result = format_post_as_html(post)
+
+        self.assertIn("Line one<br>", result)
+        self.assertIn("Line two<br>", result)
+
+    def test_preserves_paragraph_breaks(self):
+        post = "Paragraph one.\n\nParagraph two."
+
+        result = format_post_as_html(post)
+
+        self.assertIn("Paragraph one.", result)
+        self.assertIn("Paragraph two.", result)
+
+    def test_escapes_html_entities(self):
+        post = "Use <script> & run"
+
+        result = format_post_as_html(post)
+
+        self.assertNotIn("<script>", result)
+        self.assertIn("&lt;script&gt;", result)
+        self.assertIn("&amp;", result)
+
 
 # ── cleanup_old_sent ─────────────────────────────────────────────────────────
 
@@ -278,6 +337,10 @@ class TestLinkedinMain(unittest.TestCase):
         mock_select.assert_called_once()
         mock_generate.assert_called_once()
         mock_send_one.assert_called_once()
+        # Verify HTML is sent, not plain text
+        sent_html = mock_send_one.call_args[0][5]
+        self.assertIn("<html", sent_html)
+        self.assertIn("LinkedIn post text", sent_html)
         mock_cleanup.assert_called_once()
 
     @patch("linkedin.cleanup_old_sent")

@@ -6,7 +6,12 @@ from collections import defaultdict
 from datetime import datetime
 
 
-def render_email(articles: list[dict], cfg: dict, intro: str = "") -> str:
+def render_email(
+    articles: list[dict],
+    cfg: dict,
+    intro: str = "",
+    action_items: list[dict] | None = None,
+) -> str:
     now = datetime.now().strftime("%A, %d %B %Y — %H:%M")
     count = len(articles)
 
@@ -107,8 +112,12 @@ def render_email(articles: list[dict], cfg: dict, intro: str = "") -> str:
           </p>
         </td></tr>''' if intro else ''}
 
+        {_render_action_items(action_items)}
+
         <!-- Category sections -->
         {sections}
+
+        {_render_fell_through(action_items)}
 
         <!-- Footer -->
         <tr><td style="background:#e5e7eb;border-radius:0 0 8px 8px;
@@ -123,6 +132,75 @@ def render_email(articles: list[dict], cfg: dict, intro: str = "") -> str:
   </table>
 </body>
 </html>"""
+
+
+def _render_action_items(action_items: list[dict] | None) -> str:
+    if not action_items:
+        return ""
+
+    items_html = ""
+    for item in action_items:
+        action_text = _esc(item["action"])
+        source_html = ""
+        if item.get("source_url") and item.get("source_title"):
+            source_html = (
+                f' <a href="{_esc(item["source_url"])}" '
+                f'style="color:#2563eb;text-decoration:none;font-size:12px;">'
+                f'({_esc(item["source_title"])})</a>'
+            )
+        items_html += f"""
+              <li style="margin-bottom:8px;font-size:14px;line-height:1.5;color:#1f2937;">
+                {action_text}{source_html}
+              </li>"""
+
+    return f"""<tr><td style="padding:16px 32px 8px;">
+          <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;
+                      padding:20px 24px;">
+            <h2 style="margin:0 0 12px;font-size:15px;font-weight:700;color:#92400e;
+                        text-transform:uppercase;letter-spacing:.06em;">
+              Action Items
+            </h2>
+            <ul style="margin:0;padding-left:20px;">{items_html}
+            </ul>
+          </div>
+        </td></tr>"""
+
+
+def _render_fell_through(action_items: list[dict] | None) -> str:
+    if not action_items:
+        return ""
+
+    fell_through = [
+        item for item in action_items
+        if item.get("source_url") and item.get("source_title")
+    ]
+    if not fell_through:
+        return ""
+
+    links_html = ""
+    for item in fell_through:
+        links_html += f"""
+              <li style="margin-bottom:6px;font-size:13px;line-height:1.5;">
+                <a href="{_esc(item["source_url"])}"
+                   style="color:#2563eb;text-decoration:none;">
+                  {_esc(item["source_title"])}
+                </a>
+              </li>"""
+
+    return f"""<tr><td style="padding:8px 32px 16px;">
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;
+                      padding:16px 24px;">
+            <h2 style="margin:0 0 10px;font-size:14px;font-weight:700;color:#6b7280;
+                        text-transform:uppercase;letter-spacing:.06em;">
+              Fell Through the Cracks
+            </h2>
+            <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">
+              Articles referenced in today&rsquo;s action items that didn&rsquo;t make the main digest:
+            </p>
+            <ul style="margin:0;padding-left:20px;">{links_html}
+            </ul>
+          </div>
+        </td></tr>"""
 
 
 def _esc(s: str) -> str:

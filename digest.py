@@ -193,8 +193,11 @@ def _score_batch(
     articles: list[dict],
     category: str,
     max_relevant: int = 5,
-) -> list[dict]:
-    """Score a single batch of articles for relevance."""
+) -> tuple[list[dict], list[dict]]:
+    """Score a single batch of articles for relevance.
+
+    Returns (relevant, non_relevant) — both with reasons attached.
+    """
     article_list = "\n".join(
         f'- id={a["id"]!r} source={a["source"]!r} title={a["title"]!r} snippet={a["snippet"][:300]!r}'
         for a in articles
@@ -213,7 +216,7 @@ def _score_batch(
         )
     except (httpx.TimeoutException, anthropic.APIError) as exc:
         log.error("Relevance API call failed for category '%s': %s", category, exc)
-        return []
+        return [], []
 
     raw_text = msg.content[0].text
     log.debug("Relevance raw response [%s]:\n%s", category, raw_text)
@@ -237,44 +240,52 @@ def _score_batch(
         log.warning(
             "Claude returned empty response for relevance scoring [%s]", category
         )
-        return []
+        return [], []
     try:
         scores = json.loads(raw)
     except json.JSONDecodeError:
         log.error(
             "Failed to parse relevance JSON [%s]. Raw response:\n%s", category, raw_text
         )
-        return []
+        return [], []
 
     reason_by_id = {s["id"]: s.get("reason", "") for s in scores}
-    relevant_ids = [s["id"] for s in scores if s.get("relevant")]
+    relevant_ids = set(s["id"] for s in scores if s.get("relevant"))
 
-    result = []
+    relevant = []
+    non_relevant = []
     for a in articles:
-        if a["id"] in relevant_ids:
-            result.append({**a, "reason": reason_by_id.get(a["id"], "")})
-            if len(result) >= max_relevant:
-                break
+        enriched = {**a, "reason": reason_by_id.get(a["id"], "")}
+        if a["id"] in relevant_ids and len(relevant) < max_relevant:
+            relevant.append(enriched)
+        else:
+            non_relevant.append(enriched)
 
-    return result
+    return relevant, non_relevant
 
 
 def score_relevance(
     client: anthropic.Anthropic, cfg: dict, articles: list[dict]
-) -> list[dict]:
-    """Ask Claude which articles are relevant, batched by category."""
+) -> tuple[list[dict], list[dict]]:
+    """Ask Claude which articles are relevant, batched by category.
+
+    Returns (relevant, non_relevant).
+    """
     context_parts = _build_relevance_context(cfg)
     groups = _group_by_category(articles)
     max_relevant = cfg.get("feeds", {}).get("max_relevant_per_category", 5)
 
-    result = []
+    all_relevant = []
+    all_non_relevant = []
     for category, batch in groups.items():
         log.info("Scoring %d articles in category '%s'", len(batch), category)
-        result.extend(
-            _score_batch(client, context_parts, batch, category, max_relevant)
+        relevant, non_relevant = _score_batch(
+            client, context_parts, batch, category, max_relevant
         )
+        all_relevant.extend(relevant)
+        all_non_relevant.extend(non_relevant)
 
-    return result
+    return all_relevant, all_non_relevant
 
 
 def _summarize_batch(
@@ -370,6 +381,73 @@ def generate_intro(client: anthropic.Anthropic, articles: list[dict]) -> str:
     return raw_text
 
 
+ACTIONS_SYSTEM = """You are a security advisor generating actionable recommendations from today's news.
+Review ALL articles below — both the selected digest articles and the remaining articles.
+Generate 3–5 practical, specific security actions the reader should take today based on the news.
+
+Each action MUST be concise — one sentence, maximum 140 characters. Think headline-length.
+
+For each action:
+- If the action is based on a NON-SELECTED article (from the "Remaining articles" section),
+  include the article's URL and title so the reader can follow up.
+- If the action is based on a selected digest article, set source_url and source_title to null
+  (the reader already has it in the main digest).
+
+Return ONLY JSON — no markdown, no explanation:
+{{"action_items": [
+  {{"action": "concise actionable recommendation", "source_url": "url or null", "source_title": "title or null"}}
+]}}"""
+
+
+def generate_actions_and_briefs(
+    client: anthropic.Anthropic,
+    relevant: list[dict],
+    non_relevant: list[dict],
+) -> list[dict]:
+    """Generate action items from all articles. Returns list of action item dicts."""
+    selected_list = "\n".join(
+        f'- title={a["title"]!r} url={a["url"]!r} snippet={a.get("snippet", "")[:200]!r}'
+        for a in relevant
+    )
+    remaining_list = "\n".join(
+        f'- title={a["title"]!r} url={a["url"]!r} snippet={a.get("snippet", "")[:200]!r}'
+        for a in non_relevant
+    )
+
+    prompt = (
+        f"Selected digest articles:\n{selected_list}\n\n"
+        f"Remaining articles:\n{remaining_list}"
+    )
+
+    log.debug("Actions prompt:\n%s", prompt)
+
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=MAX_TOKENS,
+            system=ACTIONS_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except (httpx.TimeoutException, anthropic.APIError) as exc:
+        log.error("Actions API call failed: %s", exc)
+        return []
+
+    raw_text = msg.content[0].text
+    log.debug("Actions raw response:\n%s", raw_text)
+
+    raw = strip_code_fences(raw_text)
+    if not raw:
+        log.warning("Claude returned empty response for actions")
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.error("Failed to parse actions JSON. Raw response:\n%s", raw_text)
+        return []
+
+    return data.get("action_items", [])
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -396,7 +474,7 @@ def main():
         return
 
     # 3. Relevance filter
-    relevant = score_relevance(claude, cfg, unseen)
+    relevant, non_relevant = score_relevance(claude, cfg, unseen)
     log.info(f"{len(relevant)} articles deemed relevant")
     if not relevant:
         log.info("No relevant articles this run.")
@@ -413,8 +491,9 @@ def main():
     if not with_summary:
         log.info("No summarized content to send — skipping email.")
     else:
+        action_items = generate_actions_and_briefs(claude, relevant, non_relevant)
         intro = generate_intro(claude, with_summary)
-        html = render_email(summarized, cfg, intro=intro)
+        html = render_email(summarized, cfg, intro=intro, action_items=action_items)
         subject = f"📰 Feed Digest — {datetime.now().strftime('%d %b %Y, %H:%M')}"
         send_digest(cfg, subject, html)
         record_sent(con, with_summary)
