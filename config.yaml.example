@@ -6,6 +6,7 @@ debug: false  # Set to true to log full Claude prompts and responses
 
 anthropic:
   api_key: "sk-ant-..."          # or set ANTHROPIC_API_KEY env var
+  model: "claude-opus-4-7"       # Claude model to use for all API calls
 
 # RSS/Atom feeds grouped by category.
 # Feed source names come from the feed's own <title> element.

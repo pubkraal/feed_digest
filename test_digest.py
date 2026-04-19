@@ -17,6 +17,7 @@ from digest import (
     cleanup_old_seen,
     score_relevance,
     summarize_articles,
+    generate_intro,
     generate_actions_and_briefs,
     main,
 )
@@ -226,6 +227,35 @@ def _mock_client(response_json):
     return client
 
 
+class TestScoreRelevanceModel(unittest.TestCase):
+
+    def test_uses_model_from_config(self):
+        articles = [_article()]
+        response = [{"id": "1", "relevant": True, "reason": "good"}]
+        client = _mock_client(response)
+        cfg = {
+            "interests": "security",
+            "preferences": {},
+            "anthropic": {"model": "claude-test-model"},
+        }
+
+        score_relevance(client, cfg, articles)
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        articles = [_article()]
+        response = [{"id": "1", "relevant": True, "reason": "good"}]
+        client = _mock_client(response)
+        cfg = {"interests": "security", "preferences": {}}
+
+        score_relevance(client, cfg, articles)
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
+
+
 class TestScoreRelevance(unittest.TestCase):
 
     def test_returns_relevant_and_non_relevant(self):
@@ -346,6 +376,29 @@ class TestScoreRelevance(unittest.TestCase):
         self.assertEqual(len(non_relevant), 2)
         non_rel_ids = {a["id"] for a in non_relevant}
         self.assertEqual(non_rel_ids, {"2", "3"})
+
+
+class TestSummarizeArticlesModel(unittest.TestCase):
+
+    def test_uses_model_parameter(self):
+        articles = [_article(id="1")]
+        response = [{"id": "1", "summary": "Sum."}]
+        client = _mock_client(response)
+
+        summarize_articles(client, articles, model="claude-test-model")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        articles = [_article(id="1")]
+        response = [{"id": "1", "summary": "Sum."}]
+        client = _mock_client(response)
+
+        summarize_articles(client, articles)
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
 
 
 class TestSummarizeArticles(unittest.TestCase):
@@ -512,6 +565,59 @@ class TestMain(unittest.TestCase):
 
         mock_mark_seen.assert_called_once()
         mock_summarize.assert_not_called()
+
+
+class TestGenerateIntroModel(unittest.TestCase):
+
+    def test_uses_model_parameter(self):
+        articles = [_article(id="1")]
+        client = _mock_client("Intro text")
+        # _mock_client returns JSON-encoded, but generate_intro reads .text directly
+        msg = MagicMock()
+        msg.content = [MagicMock(text="Intro text")]
+        msg.stop_reason = "end_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = msg
+
+        generate_intro(client, articles, model="claude-test-model")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        articles = [_article(id="1")]
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = [MagicMock(text="Intro text")]
+        msg.stop_reason = "end_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = msg
+
+        generate_intro(client, articles)
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
+
+
+class TestGenerateActionsModel(unittest.TestCase):
+
+    def test_uses_model_parameter(self):
+        response = {"action_items": []}
+        client = _mock_client(response)
+
+        generate_actions_and_briefs(client, [_article()], [], model="claude-test-model")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        response = {"action_items": []}
+        client = _mock_client(response)
+
+        generate_actions_and_briefs(client, [_article()], [])
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
 
 
 class TestGenerateActionsAndBriefs(unittest.TestCase):

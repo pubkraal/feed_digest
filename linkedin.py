@@ -16,7 +16,7 @@ import anthropic
 import httpx
 
 from config import load_config
-from digest import DB_PATH, init_db, setup_logging, strip_code_fences
+from digest import DB_PATH, DEFAULT_MODEL, init_db, setup_logging, strip_code_fences
 from mailer import send_one
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,10 @@ def fetch_recent_sent(con, days: int = 7) -> list[dict]:
 
 
 def select_sector_articles(
-    client: anthropic.Anthropic, articles: list[dict], sector: str
+    client: anthropic.Anthropic,
+    articles: list[dict],
+    sector: str,
+    model: str = DEFAULT_MODEL,
 ) -> list[dict]:
     article_list = "\n".join(
         f'- id={a["id"]!r} title={a["title"]!r} summary={a["summary"][:200]!r}'
@@ -76,7 +79,7 @@ def select_sector_articles(
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=MAX_TOKENS,
             system=SECTOR_SELECT_SYSTEM.format(sector=sector),
             messages=[{"role": "user", "content": article_list}],
@@ -98,7 +101,10 @@ def select_sector_articles(
 
 
 def generate_linkedin_post(
-    client: anthropic.Anthropic, articles: list[dict], sector: str
+    client: anthropic.Anthropic,
+    articles: list[dict],
+    sector: str,
+    model: str = DEFAULT_MODEL,
 ) -> str:
     article_text = "\n\n".join(
         f'Title: {a["title"]}\nURL: {a["url"]}\nSummary: {a["summary"]}'
@@ -107,7 +113,7 @@ def generate_linkedin_post(
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=MAX_TOKENS,
             system=LINKEDIN_POST_SYSTEM.format(sector=sector),
             messages=[{"role": "user", "content": article_text}],
@@ -174,6 +180,7 @@ def main():
         api_key=cfg["anthropic"]["api_key"],
         timeout=httpx.Timeout(120.0, connect=10.0),
     )
+    model = cfg.get("anthropic", {}).get("model", DEFAULT_MODEL)
 
     # 1. Fetch recent sent articles
     articles = fetch_recent_sent(con)
@@ -187,14 +194,14 @@ def main():
     log.info("Selected sector: %s", sector)
 
     # 3. Select top articles for sector
-    selected = select_sector_articles(claude, articles, sector)
+    selected = select_sector_articles(claude, articles, sector, model=model)
     if not selected:
         log.info("No articles selected for sector '%s' — exiting.", sector)
         cleanup_old_sent(con)
         return
 
     # 4. Generate LinkedIn post
-    post = generate_linkedin_post(claude, selected, sector)
+    post = generate_linkedin_post(claude, selected, sector, model=model)
     if not post:
         log.info("Failed to generate LinkedIn post — exiting.")
         cleanup_old_sent(con)

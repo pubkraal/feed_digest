@@ -112,6 +112,27 @@ def _mock_client(response_text):
     return client
 
 
+class TestSelectSectorArticlesModel(unittest.TestCase):
+
+    def test_uses_model_parameter(self):
+        articles = [{"id": "1", "title": "A", "summary": "Sum"}]
+        client = _mock_client(json.dumps(["1"]))
+
+        select_sector_articles(client, articles, "energy", model="claude-test-model")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        articles = [{"id": "1", "title": "A", "summary": "Sum"}]
+        client = _mock_client(json.dumps(["1"]))
+
+        select_sector_articles(client, articles, "energy")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
+
+
 class TestSelectSectorArticles(unittest.TestCase):
 
     def test_returns_selected_article_ids(self):
@@ -158,6 +179,27 @@ class TestSelectSectorArticles(unittest.TestCase):
 
 
 # ── generate_linkedin_post ───────────────────────────────────────────────────
+
+
+class TestGenerateLinkedinPostModel(unittest.TestCase):
+
+    def test_uses_model_parameter(self):
+        articles = [{"id": "1", "title": "A", "url": "https://a.com", "summary": "S"}]
+        client = _mock_client("Post text")
+
+        generate_linkedin_post(client, articles, "energy", model="claude-test-model")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-test-model")
+
+    def test_defaults_model_to_opus_4_7(self):
+        articles = [{"id": "1", "title": "A", "url": "https://a.com", "summary": "S"}]
+        client = _mock_client("Post text")
+
+        generate_linkedin_post(client, articles, "energy")
+
+        call_args = client.messages.create.call_args
+        self.assertEqual(call_args[1]["model"], "claude-opus-4-7")
 
 
 class TestGenerateLinkedinPost(unittest.TestCase):
