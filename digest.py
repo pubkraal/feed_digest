@@ -37,6 +37,7 @@ DB_PATH = Path(__file__).parent / "state.db"
 
 
 MAX_TOKENS = 16384
+DEFAULT_MODEL = "claude-opus-4-7"
 
 
 def _group_by_category(articles: list[dict]) -> dict[str, list[dict]]:
@@ -193,6 +194,7 @@ def _score_batch(
     articles: list[dict],
     category: str,
     max_relevant: int = 5,
+    model: str = DEFAULT_MODEL,
 ) -> tuple[list[dict], list[dict]]:
     """Score a single batch of articles for relevance.
 
@@ -209,7 +211,7 @@ def _score_batch(
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=MAX_TOKENS,
             system=RELEVANCE_SYSTEM.format(max_relevant=max_relevant),
             messages=[{"role": "user", "content": prompt}],
@@ -274,13 +276,14 @@ def score_relevance(
     context_parts = _build_relevance_context(cfg)
     groups = _group_by_category(articles)
     max_relevant = cfg.get("feeds", {}).get("max_relevant_per_category", 5)
+    model = cfg.get("anthropic", {}).get("model", DEFAULT_MODEL)
 
     all_relevant = []
     all_non_relevant = []
     for category, batch in groups.items():
         log.info("Scoring %d articles in category '%s'", len(batch), category)
         relevant, non_relevant = _score_batch(
-            client, context_parts, batch, category, max_relevant
+            client, context_parts, batch, category, max_relevant, model=model
         )
         all_relevant.extend(relevant)
         all_non_relevant.extend(non_relevant)
@@ -289,7 +292,10 @@ def score_relevance(
 
 
 def _summarize_batch(
-    client: anthropic.Anthropic, articles: list[dict], category: str
+    client: anthropic.Anthropic,
+    articles: list[dict],
+    category: str,
+    model: str = DEFAULT_MODEL,
 ) -> dict[str, str]:
     """Summarize a single batch of articles. Returns {id: summary}."""
     article_list = "\n\n".join(
@@ -301,7 +307,7 @@ def _summarize_batch(
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=MAX_TOKENS,
             system=SUMMARY_SYSTEM,
             messages=[{"role": "user", "content": article_list}],
@@ -340,14 +346,18 @@ def _summarize_batch(
         return {}
 
 
-def summarize_articles(client: anthropic.Anthropic, articles: list[dict]) -> list[dict]:
+def summarize_articles(
+    client: anthropic.Anthropic,
+    articles: list[dict],
+    model: str = DEFAULT_MODEL,
+) -> list[dict]:
     """Ask Claude to summarize each relevant article, batched by category."""
     groups = _group_by_category(articles)
 
     summaries = {}
     for category, batch in groups.items():
         log.info("Summarizing %d articles in category '%s'", len(batch), category)
-        summaries.update(_summarize_batch(client, batch, category))
+        summaries.update(_summarize_batch(client, batch, category, model=model))
 
     return [
         {**a, "summary": summaries.get(a["id"], "No summary available.")}
@@ -355,7 +365,11 @@ def summarize_articles(client: anthropic.Anthropic, articles: list[dict]) -> lis
     ]
 
 
-def generate_intro(client: anthropic.Anthropic, articles: list[dict]) -> str:
+def generate_intro(
+    client: anthropic.Anthropic,
+    articles: list[dict],
+    model: str = DEFAULT_MODEL,
+) -> str:
     """Generate a short intro for the digest email based on article summaries."""
     article_list = "\n".join(
         f'- [{a["category"]}] {a["title"]}: {a.get("summary", "")[:200]}'
@@ -366,7 +380,7 @@ def generate_intro(client: anthropic.Anthropic, articles: list[dict]) -> str:
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=256,
             system=INTRO_SYSTEM,
             messages=[{"role": "user", "content": article_list}],
@@ -403,6 +417,7 @@ def generate_actions_and_briefs(
     client: anthropic.Anthropic,
     relevant: list[dict],
     non_relevant: list[dict],
+    model: str = DEFAULT_MODEL,
 ) -> list[dict]:
     """Generate action items from all articles. Returns list of action item dicts."""
     selected_list = "\n".join(
@@ -423,7 +438,7 @@ def generate_actions_and_briefs(
 
     try:
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model,
             max_tokens=MAX_TOKENS,
             system=ACTIONS_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
@@ -459,6 +474,7 @@ def main():
         api_key=cfg["anthropic"]["api_key"],
         timeout=httpx.Timeout(120.0, connect=10.0),
     )
+    model = cfg.get("anthropic", {}).get("model", DEFAULT_MODEL)
 
     # 1. Fetch from RSS feeds
     raw_articles = fetch_rss_articles(cfg)
@@ -482,7 +498,7 @@ def main():
         return
 
     # 4. Summarize
-    summarized = summarize_articles(claude, relevant)
+    summarized = summarize_articles(claude, relevant, model=model)
 
     # 5. Send email (only if we have content)
     with_summary = [
@@ -491,8 +507,10 @@ def main():
     if not with_summary:
         log.info("No summarized content to send — skipping email.")
     else:
-        action_items = generate_actions_and_briefs(claude, relevant, non_relevant)
-        intro = generate_intro(claude, with_summary)
+        action_items = generate_actions_and_briefs(
+            claude, relevant, non_relevant, model=model
+        )
+        intro = generate_intro(claude, with_summary, model=model)
         html = render_email(summarized, cfg, intro=intro, action_items=action_items)
         subject = f"📰 Feed Digest — {datetime.now().strftime('%d %b %Y, %H:%M')}"
         send_digest(cfg, subject, html)
