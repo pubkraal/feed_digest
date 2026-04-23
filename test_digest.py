@@ -735,6 +735,52 @@ class TestTimeoutHandling(unittest.TestCase):
         self.assertEqual(result[0]["summary"], "No summary available.")
 
 
+def _empty_content_msg():
+    msg = MagicMock()
+    msg.content = []
+    msg.stop_reason = "pause_turn"
+    msg.usage = MagicMock(input_tokens=100, output_tokens=0)
+    return msg
+
+
+class TestEmptyContentHandling(unittest.TestCase):
+
+    def test_score_relevance_empty_content_returns_empty(self):
+        client = MagicMock()
+        client.messages.create.return_value = _empty_content_msg()
+        cfg = {"interests": "security", "preferences": {}}
+
+        relevant, non_relevant = score_relevance(client, cfg, [_article(id="1")])
+
+        self.assertEqual(relevant, [])
+        self.assertEqual(non_relevant, [])
+
+    def test_summarize_empty_content_returns_no_summaries(self):
+        client = MagicMock()
+        client.messages.create.return_value = _empty_content_msg()
+
+        result = summarize_articles(client, [_article(id="1")])
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["summary"], "No summary available.")
+
+    def test_generate_intro_empty_content_returns_empty_string(self):
+        client = MagicMock()
+        client.messages.create.return_value = _empty_content_msg()
+
+        result = generate_intro(client, [_article(id="1")])
+
+        self.assertEqual(result, "")
+
+    def test_generate_actions_empty_content_returns_empty_list(self):
+        client = MagicMock()
+        client.messages.create.return_value = _empty_content_msg()
+
+        result = generate_actions_and_briefs(client, [_article(id="1")], [])
+
+        self.assertEqual(result, [])
+
+
 class TestMainEmailGuard(unittest.TestCase):
 
     @patch("digest.send_digest")

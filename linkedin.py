@@ -16,7 +16,14 @@ import anthropic
 import httpx
 
 from config import load_config
-from digest import DB_PATH, DEFAULT_MODEL, init_db, setup_logging, strip_code_fences
+from digest import (
+    DB_PATH,
+    DEFAULT_MODEL,
+    first_text,
+    init_db,
+    setup_logging,
+    strip_code_fences,
+)
 from mailer import send_one
 
 log = logging.getLogger(__name__)
@@ -88,7 +95,7 @@ def select_sector_articles(
         log.error("Sector selection API call failed: %s", exc)
         return []
 
-    raw = strip_code_fences(msg.content[0].text)
+    raw = strip_code_fences(first_text(msg))
     try:
         selected_ids = json.loads(raw)
     except json.JSONDecodeError:
@@ -122,7 +129,7 @@ def generate_linkedin_post(
         log.error("LinkedIn post generation failed: %s", exc)
         return ""
 
-    return msg.content[0].text.strip()
+    return first_text(msg).strip()
 
 
 def _esc(s: str) -> str:

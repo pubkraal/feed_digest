@@ -54,6 +54,20 @@ def strip_code_fences(text: str) -> str:
     return stripped.strip()
 
 
+def first_text(msg) -> str:
+    """Return the first text block from a Claude message, or "" if none.
+
+    Claude can return an empty content list (e.g. stop_reason='pause_turn') or
+    lead with non-text blocks (thinking, tool_use). Indexing [0].text crashes
+    in both cases.
+    """
+    for block in msg.content:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            return text
+    return ""
+
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 
@@ -220,7 +234,7 @@ def _score_batch(
         log.error("Relevance API call failed for category '%s': %s", category, exc)
         return [], []
 
-    raw_text = msg.content[0].text
+    raw_text = first_text(msg)
     log.debug("Relevance raw response [%s]:\n%s", category, raw_text)
     log.debug(
         "Relevance API usage [%s]: input=%d output=%d stop=%s",
@@ -316,7 +330,7 @@ def _summarize_batch(
         log.error("Summary API call failed for category '%s': %s", category, exc)
         return {}
 
-    raw_text = msg.content[0].text
+    raw_text = first_text(msg)
     log.debug("Summary raw response [%s]:\n%s", category, raw_text)
     log.debug(
         "Summary API usage [%s]: input=%d output=%d stop=%s",
@@ -389,7 +403,7 @@ def generate_intro(
         log.error("Intro API call failed: %s", exc)
         return ""
 
-    raw_text = msg.content[0].text.strip()
+    raw_text = first_text(msg).strip()
     log.debug("Intro raw response:\n%s", raw_text)
 
     return raw_text
@@ -447,7 +461,7 @@ def generate_actions_and_briefs(
         log.error("Actions API call failed: %s", exc)
         return []
 
-    raw_text = msg.content[0].text
+    raw_text = first_text(msg)
     log.debug("Actions raw response:\n%s", raw_text)
 
     raw = strip_code_fences(raw_text)

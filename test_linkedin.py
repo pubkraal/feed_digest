@@ -177,6 +177,19 @@ class TestSelectSectorArticles(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_returns_empty_on_empty_content(self):
+        articles = [{"id": "1", "title": "A", "summary": "Sum"}]
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = []
+        msg.stop_reason = "pause_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=0)
+        client.messages.create.return_value = msg
+
+        result = select_sector_articles(client, articles, "energy")
+
+        self.assertEqual(result, [])
+
 
 # ── generate_linkedin_post ───────────────────────────────────────────────────
 
@@ -228,6 +241,19 @@ class TestGenerateLinkedinPost(unittest.TestCase):
         articles = [{"id": "1", "title": "A", "url": "https://a.com", "summary": "S"}]
         client = MagicMock()
         client.messages.create.side_effect = Exception("API error")
+
+        result = generate_linkedin_post(client, articles, "energy")
+
+        self.assertEqual(result, "")
+
+    def test_returns_empty_on_empty_content(self):
+        articles = [{"id": "1", "title": "A", "url": "https://a.com", "summary": "S"}]
+        client = MagicMock()
+        msg = MagicMock()
+        msg.content = []
+        msg.stop_reason = "pause_turn"
+        msg.usage = MagicMock(input_tokens=100, output_tokens=0)
+        client.messages.create.return_value = msg
 
         result = generate_linkedin_post(client, articles, "energy")
 
